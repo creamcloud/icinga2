@@ -27,8 +27,6 @@
 #	include <poll.h>
 #endif /* _WIN32 */
 
-#define TLS_TIMEOUT_SECONDS 10
-
 using namespace icinga;
 
 int TlsStream::m_SSLIndex;
@@ -315,19 +313,15 @@ void TlsStream::Handshake()
 	m_CurrentAction = TlsActionHandshake;
 	ChangeEvents(POLLOUT);
 
-	boost::system_time const timeout = boost::get_system_time() + boost::posix_time::seconds(TLS_TIMEOUT_SECONDS);
-
-	while (!m_HandshakeOK && !m_ErrorOccurred && !m_Eof && timeout > boost::get_system_time())
-		m_CV.timed_wait(lock, timeout);
-
-	// We should _NOT_ (underline, bold, itallic and wordart) throw an exception for a timeout.
-	if (timeout < boost::get_system_time())
-		BOOST_THROW_EXCEPTION(std::runtime_error("Timeout during handshake."));
+	while (!m_HandshakeOK && !m_ErrorOccurred && !m_Eof)
+		m_CV.wait(lock);
 
 	if (m_Eof)
 		BOOST_THROW_EXCEPTION(std::runtime_error("Socket was closed during TLS handshake."));
 
 	HandleError();
+
+	/* Everything ok. */
 }
 
 /**
