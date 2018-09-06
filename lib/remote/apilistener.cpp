@@ -528,7 +528,12 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		JsonRpc::SendMessage(tlsStream, message);
 		ctype = ClientJsonRpc;
 	} else {
-		tlsStream->WaitForData(10);
+		try {
+			tlsStream->WaitForData(10);
+		} catch (const std::exception& ex) {
+			Log(LogWarning, "ApiListener")
+				<< "No data received: " << DiagnosticInformation(ex, false);
+		}
 
 		if (!tlsStream->IsDataAvailable()) {
 			if (identity.IsEmpty())

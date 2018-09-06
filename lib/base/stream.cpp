@@ -60,33 +60,22 @@ void Stream::SignalDataAvailable()
 	}
 }
 
-bool Stream::WaitForData()
-{
-	if (!SupportsWaiting())
-		BOOST_THROW_EXCEPTION(std::runtime_error("Stream does not support waiting."));
-
-	boost::mutex::scoped_lock lock(m_Mutex);
-
-	while (!IsDataAvailable() && !IsEof())
-		m_CV.wait(lock);
-
-	return IsDataAvailable() || IsEof();
-}
-
 bool Stream::WaitForData(int timeout)
 {
 	if (!SupportsWaiting())
 		BOOST_THROW_EXCEPTION(std::runtime_error("Stream does not support waiting."));
 
-	if (timeout < 0)
-		BOOST_THROW_EXCEPTION(std::runtime_error("Timeout can't be negative"));
-
-	boost::system_time const point_of_timeout = boost::get_system_time() + boost::posix_time::seconds(timeout);
-
 	boost::mutex::scoped_lock lock(m_Mutex);
 
-	while (!IsDataAvailable() && !IsEof() && point_of_timeout > boost::get_system_time())
-		m_CV.timed_wait(lock, point_of_timeout);
+	while (!IsDataAvailable() && !IsEof()) {
+		if (timeout < 0) {
+			m_CV.wait(lock);
+		} else {
+			if (!m_CV.timed_wait(lock, boost::posix_time::milliseconds(timeout * 1000))) {
+				BOOST_THROW_EXCEPTION(std::runtime_error("Timeout exceeded waiting for stream data."));
+			}
+		}
+	}
 
 	return IsDataAvailable() || IsEof();
 }

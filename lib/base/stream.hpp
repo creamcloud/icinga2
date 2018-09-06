@@ -124,8 +124,7 @@ public:
 	 * Waits until data can be read from the stream.
 	 * Optionally with a timeout.
 	 */
-	bool WaitForData();
-	bool WaitForData(int timeout);
+	bool WaitForData(int timeout = -1);
 
 	virtual void SetCorked(bool corked);
 	bool IsCorked() const;
