@@ -126,9 +126,6 @@ public:
 	 */
 	bool WaitForData(int timeout = -1);
 
-	virtual void SetCorked(bool corked);
-	bool IsCorked() const;
-
 	virtual bool SupportsWaiting() const;
 
 	virtual bool IsDataAvailable() const;
@@ -145,8 +142,6 @@ private:
 
 	boost::mutex m_Mutex;
 	boost::condition_variable m_CV;
-
-	bool m_Corked{false};
 };
 
 }

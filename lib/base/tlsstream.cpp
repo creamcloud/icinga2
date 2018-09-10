@@ -149,16 +149,12 @@ void TlsStream::OnEvent(int revents)
 	char buffer[64 * 1024];
 
 	if (m_CurrentAction == TlsActionNone) {
-		bool corked = IsCorked();
-		if (!corked && (revents & (POLLIN | POLLERR | POLLHUP)))
+		if (revents & (POLLIN | POLLERR | POLLHUP))
 			m_CurrentAction = TlsActionRead;
 		else if (m_SendQ->GetAvailableBytes() > 0 && (revents & POLLOUT))
 			m_CurrentAction = TlsActionWrite;
 		else {
-			if (corked)
-				ChangeEvents(0);
-			else
-				ChangeEvents(POLLIN);
+			ChangeEvents(POLLIN);
 
 			return;
 		}
@@ -185,24 +181,9 @@ void TlsStream::OnEvent(int revents)
 					readTotal += rc;
 				}
 
-#ifdef I2_DEBUG /* I2_DEBUG */
-				Log(LogDebug, "TlsStream")
-					<< "Read bytes: " << rc << " Total read bytes: " << readTotal;
-#endif /* I2_DEBUG */
-				/* Limit read size. We cannot do this check inside the while loop
-				 * since below should solely check whether OpenSSL has more data
-				 * or not. */
-				if (readTotal >= 64 * 1024) {
-#ifdef I2_DEBUG /* I2_DEBUG */
-					Log(LogWarning, "TlsStream")
-						<< "Maximum read bytes exceeded: " << readTotal;
-#endif /* I2_DEBUG */
-					break;
-				}
-
-			/* Use OpenSSL's state machine here to determine whether we need
-			 * to read more data. SSL_has_pending() is available with 1.1.0.
-			 */
+				/* Use OpenSSL's state machine here to determine whether we need
+				 * to read more data. SSL_has_pending() is available with 1.1.0.
+				 */
 			} while (SSL_pending(m_SSL.get()));
 
 			if (success)
@@ -285,7 +266,7 @@ void TlsStream::OnEvent(int revents)
 
 		lock.unlock();
 
-		while (!IsCorked() && m_RecvQ->IsDataAvailable() && IsHandlingEvents())
+		while (m_RecvQ->IsDataAvailable() && IsHandlingEvents())
 			SignalDataAvailable();
 	}
 
@@ -419,18 +400,6 @@ bool TlsStream::IsDataAvailable() const
 	boost::mutex::scoped_lock lock(m_Mutex);
 
 	return m_RecvQ->GetAvailableBytes() > 0;
-}
-
-void TlsStream::SetCorked(bool corked)
-{
-	Stream::SetCorked(corked);
-
-	boost::mutex::scoped_lock lock(m_Mutex);
-
-	if (corked)
-		m_CurrentAction = TlsActionNone;
-	else
-		ChangeEvents(POLLIN | POLLOUT);
 }
 
 Socket::Ptr TlsStream::GetSocket() const
