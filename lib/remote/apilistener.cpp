@@ -499,7 +499,7 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 
 	if (cert) {
 		try {
-			identity = GetCertificateCN(cert);
+			identity = hostname;
 		} catch (const std::exception&) {
 			Log(LogCritical, "ApiListener")
 				<< "Cannot get certificate common name from cert path: '" << GetDefaultCertPath() << "'.";
