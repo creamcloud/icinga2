@@ -330,7 +330,7 @@ bool ApiListener::IsMaster() const
 }
 
 /**
- * Creates a new JSON-RPC listener on the specified port.
+ * Creates a new API listener on the specified port.
  *
  * @param node The host the listener should be bound to.
  * @param service The port to listen on.
@@ -369,6 +369,11 @@ bool ApiListener::AddListener(const String& node, const String& service)
 	return true;
 }
 
+/**
+ * Listens for incoming connections on the specified socket.
+ *
+ * @param server The socket.
+ */
 void ApiListener::ListenerThreadProc(const Socket::Ptr& server)
 {
 	Utility::SetThreadName("API Listener");
@@ -380,15 +385,35 @@ void ApiListener::ListenerThreadProc(const Socket::Ptr& server)
 			Socket::Ptr client = server->Accept();
 
 			/* Use a queue with limited resources. */
-			l_ApiListenerIncomingConnectWorkQueue->Enqueue(std::bind(&ApiListener::NewClientHandler, this, client, String(), RoleServer));
-		} catch (const std::exception&) {
-			Log(LogCritical, "ApiListener", "Cannot accept new connection.");
+			l_ApiListenerIncomingConnectWorkQueue->Enqueue(std::bind(&ApiListener::HandleConnection, this, client));
+		} catch (const std::exception& ex) {
+			Log(LogCritical, "ApiListener")
+				<< "Cannot accept new connection: " << DiagnosticInformation(ex, false);
 		}
 	}
 }
 
 /**
- * Creates a new JSON-RPC client and connects to the specified endpoint.
+ * Handles a new client connection from ListenerThreadProc().
+ * Wraps exception logging logic to avoid WQ exception callbacks.
+ *
+ * @param client The new client socket.
+ */
+void ApiListener::HandleConnection(const Socket::Ptr& client)
+{
+	try {
+		NewClientHandler(client, String(), RoleServer);
+	} catch (const std::exception& ex) {
+		Log(LogCritical, "ApiListener")
+			<< "Exception while handling new API client connection: " << DiagnosticInformation(ex, false);
+
+		Log(LogDebug, "ApiListener")
+			<< "Exception while handling new API client connection: " << DiagnosticInformation(ex);
+	}
+}
+
+/**
+ * Connects to the specified endpoint.
  *
  * @param endpoint The endpoint.
  */
@@ -411,49 +436,53 @@ void ApiListener::AddConnection(const Endpoint::Ptr& endpoint)
 	Log(LogInformation, "ApiListener")
 		<< "Reconnecting to endpoint '" << endpoint->GetName() << "' via host '" << host << "' and port '" << port << "'";
 
+	/* First, connect via TCP. */
 	TcpSocket::Ptr client = new TcpSocket();
 
 	try {
+		CONTEXT("TCP Socket Connect");
 		client->Connect(host, port);
-		NewClientHandler(client, endpoint->GetName(), RoleClient);
+	} catch (const std::exception& ex) {
+		client->Close();
+
+		Log(LogCritical, "ApiListener")
+			<< "Cannot connect to TCP socket on host: '" << host << "' and port '" << port << "': " << DiagnosticInformation(ex, false);
+
+		return;
+	}
+
+	String endpointName = endpoint->GetName();
+
+	/* Handle new client including TLS handshake and data exchange. */
+	try {
+		CONTEXT("New Client Handler");
+		NewClientHandler(client, endpointName, RoleClient);
 		endpoint->SetConnecting(false);
 	} catch (const std::exception& ex) {
 		endpoint->SetConnecting(false);
 		client->Close();
 
-		std::ostringstream info;
-		info << "Cannot connect to host '" << host << "' on port '" << port << "'";
-		Log(LogCritical, "ApiListener", info.str());
-		Log(LogDebug, "ApiListener")
-			<< info.str() << "\n" << DiagnosticInformation(ex);
+		Log(LogCritical, "ApiListener")
+			<< "Cannot connect to endpoint '" << endpointName << "' on host: '" << host << "' and port '" << port << "': " << DiagnosticInformation(ex, false);
+
+		return;	
 	}
 
 	Log(LogInformation, "ApiListener")
-		<< "Finished reconnecting to endpoint '" << endpoint->GetName() << "' via host '" << host << "' and port '" << port << "'";
+		<< "Finished reconnecting to endpoint '" << endpointName << "' via host '" << host << "' and port '" << port << "'.";
 }
 
-void ApiListener::NewClientHandler(const Socket::Ptr& client, const String& hostname, ConnectionRole role)
-{
-	try {
-		NewClientHandlerInternal(client, hostname, role);
-	} catch (const std::exception& ex) {
-		Log(LogCritical, "ApiListener")
-			<< "Exception while handling new API client connection: " << DiagnosticInformation(ex, false);
-
-		Log(LogDebug, "ApiListener")
-			<< "Exception while handling new API client connection: " << DiagnosticInformation(ex);
-	}
-}
 
 /**
  * Processes a new client connection.
+ * Called in AddConnection() and HandleConnection() with different roles.
  *
- * @param client The new client.
+ * @param client The new client socket.
+ * @param hostname The endpoint name.
+ * @param role The connection role (server, client).
  */
-void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const String& hostname, ConnectionRole role)
+void ApiListener::NewClientHandler(const Socket::Ptr& client, const String& hostname, ConnectionRole role)
 {
-	CONTEXT("Handling new API client connection");
-
 	String conninfo;
 
 	if (role == RoleClient)
@@ -462,6 +491,8 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		conninfo = "from";
 
 	conninfo += " " + client->GetPeerAddress();
+
+	CONTEXT("Handling new API client connection " + conninfo);
 
 	TlsStream::Ptr tlsStream;
 
@@ -476,20 +507,22 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		ObjectLock olock(this);
 		try {
 			tlsStream = new TlsStream(client, serverName, role, m_SSLContext);
-		} catch (const std::exception&) {
+		} catch (const std::exception& ex) {
 			Log(LogCritical, "ApiListener")
-				<< "Cannot create TLS stream from client connection (" << conninfo << ")";
+				<< "Cannot create TLS stream from client connection (" << conninfo << "): " << DiagnosticInformation(ex, false);
+			//throw ex;
 			return;
 		}
 	}
 
 	try {
+		CONTEXT("TLS Handshake");
 		tlsStream->Handshake();
 	} catch (const std::exception& ex) {
 		Log(LogCritical, "ApiListener")
 			<< "Client TLS handshake failed (" << conninfo << "): " << DiagnosticInformation(ex, false);
 		tlsStream->Close();
-		return;
+		throw ex;
 	}
 
 	std::shared_ptr<X509> cert = tlsStream->GetPeerCertificate();
@@ -500,11 +533,11 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 	if (cert) {
 		try {
 			identity = hostname;
-		} catch (const std::exception&) {
+		} catch (const std::exception& ex) {
 			Log(LogCritical, "ApiListener")
 				<< "Cannot get certificate common name from cert path: '" << GetDefaultCertPath() << "'.";
 			tlsStream->Close();
-			return;
+			throw ex;
 		}
 
 		verify_ok = tlsStream->IsVerifyOK();
@@ -519,6 +552,10 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 				Log(LogWarning, "ApiListener")
 					<< "Certificate validation failed for endpoint '" << hostname
 					<< "': " << tlsStream->GetVerifyError();
+
+				/* We need to proceed here since we want to support
+				 * signing requests.
+				 */
 			}
 		}
 
@@ -531,9 +568,9 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 			log << "New client connection for identity '" << identity << "' " << conninfo;
 
 			if (!verify_ok)
-				log << " (certificate validation failed: " << tlsStream->GetVerifyError() << ")";
+				log << " (certificate validation failed: '" << tlsStream->GetVerifyError() << "', possible signing request)";
 			else if (!endpoint)
-				log << " (no Endpoint object found for identity)";
+				log << " (no Endpoint object found for identity in client certificate CN)";
 		}
 	} else {
 		Log(LogInformation, "ApiListener")
@@ -552,6 +589,7 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		JsonRpc::SendMessage(tlsStream, message);
 		ctype = ClientJsonRpc;
 	} else {
+		/* Use a timeout to not leak this connection. */
 		tlsStream->WaitForData(10);
 
 		if (!tlsStream->IsDataAvailable()) {
@@ -564,9 +602,12 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 					<< "No data received on new API connection for identity '" << identity << "'. "
 					<< "Ensure that the remote endpoints are properly configured in a cluster setup.";
 			tlsStream->Close();
-			return;
+			
+
+			BOOST_THROW_EXCEPTION(std::runtime_error("No data received."));
 		}
 
+		/* Decided whther to use JSON-RPC as Netstring, or HTTP. */
 		char firstByte;
 		tlsStream->Peek(&firstByte, 1, false);
 
@@ -808,14 +849,16 @@ void ApiListener::ApiReconnectTimerHandler()
 
 	Endpoint::Ptr master = GetMaster();
 
-	if (master)
+	if (master) {
 		Log(LogNotice, "ApiListener")
 			<< "Current zone master: " << master->GetName();
+	}
 
 	std::vector<String> names;
-	for (const Endpoint::Ptr& endpoint : ConfigType::GetObjectsByType<Endpoint>())
+	for (const Endpoint::Ptr& endpoint : ConfigType::GetObjectsByType<Endpoint>()) {
 		if (endpoint->GetConnected())
 			names.emplace_back(endpoint->GetName() + " (" + Convert::ToString(endpoint->GetClients().size()) + ")");
+	}
 
 	Log(LogNotice, "ApiListener")
 		<< "Connected endpoints: " << Utility::NaturalJoin(names);

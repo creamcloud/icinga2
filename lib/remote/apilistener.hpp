@@ -142,9 +142,10 @@ private:
 	bool AddListener(const String& node, const String& service);
 	void AddConnection(const Endpoint::Ptr& endpoint);
 
-	void NewClientHandler(const Socket::Ptr& client, const String& hostname, ConnectionRole role);
-	void NewClientHandlerInternal(const Socket::Ptr& client, const String& hostname, ConnectionRole role);
 	void ListenerThreadProc(const Socket::Ptr& server);
+	void HandleConnection(const Socket::Ptr& client);
+
+	void NewClientHandler(const Socket::Ptr& client, const String& hostname, ConnectionRole role);
 
 	WorkQueue m_RelayQueue;
 	WorkQueue m_SyncQueue{0, 4};
