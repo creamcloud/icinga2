@@ -309,7 +309,7 @@ void TlsStream::HandleError() const
 			<< errinfo_openssl_error(m_ErrorCode));
 	}
 }
-
+/*
 void TlsStream::Handshake()
 {
 	boost::mutex::scoped_lock lock(m_Mutex);
@@ -330,10 +330,12 @@ void TlsStream::Handshake()
 
 	HandleError();
 }
+*/
 
 /**
  * Processes data for the stream.
  */
+/*
 size_t TlsStream::Peek(void *buffer, size_t count, bool allow_partial)
 {
 	boost::mutex::scoped_lock lock(m_Mutex);
@@ -368,6 +370,7 @@ void TlsStream::Write(const void *buffer, size_t count)
 
 	ChangeEvents(POLLIN|POLLOUT);
 }
+*/
 
 void TlsStream::Shutdown()
 {
@@ -444,3 +447,231 @@ Socket::Ptr TlsStream::GetSocket() const
 {
 	return m_Socket;
 }
+
+
+/* DEBUG */
+void TlsStream::Handshake()
+{
+	int rc;
+	size_t count;
+
+	boost::mutex::scoped_lock lock(m_Mutex);
+
+/*
+	if (!m_SSL)
+		return;
+*/
+	char buffer[64 * 1024];
+
+	for (;;) {
+		/* Clear error queue for this thread before using SSL_{read,write,do_handshake}.
+		 * Otherwise SSL_*_error() does not work reliably.
+		 */
+		ERR_clear_error();
+
+		rc = SSL_do_handshake(m_SSL.get());
+
+		if (rc > 0)
+			break;
+
+		int err = SSL_get_error(m_SSL.get(), rc);
+
+		switch (err) {
+			case SSL_ERROR_WANT_READ:
+				try {
+					m_Socket->Poll(true, false);
+				} catch (const std::exception&) {}
+				continue;
+			case SSL_ERROR_WANT_WRITE:
+				try {
+					m_Socket->Poll(false, true);
+				} catch (const std::exception&) {}
+				continue;
+			case SSL_ERROR_ZERO_RETURN:
+				lock.unlock();
+
+				Close();
+
+				return;
+			default:
+				/* Re-use old code, cleanup TODO */
+				m_ErrorCode = ERR_peek_error();
+				m_ErrorOccurred = true;
+
+				if (m_ErrorCode != 0) {
+					Log(LogWarning, "TlsStream")
+						<< "OpenSSL error: " << ERR_error_string(m_ErrorCode, nullptr);
+				} else {
+					Log(LogWarning, "TlsStream", "TLS stream was disconnected.");
+				}
+
+				lock.unlock();
+
+				Close();
+
+				BOOST_THROW_EXCEPTION(openssl_error()
+					<< boost::errinfo_api_function("SSL_do_handshake")
+					<< errinfo_openssl_error(ERR_peek_error()));
+		}
+	}
+}
+
+/* TODO: Drop allow_partial from interface */
+size_t TlsStream::Peek(void *buffer, size_t count, bool allow_partial)
+{
+//	boost::mutex::scoped_lock lock(m_Mutex);
+
+	Log(LogCritical, "TlsStream")
+		<< "BUMSTI: Peek with count " << count;
+
+	return Read(buffer, count);
+}
+
+size_t TlsStream::Read(void *buffer, size_t count, bool allow_partial)
+{
+	int rc;
+	size_t left = count;
+
+	boost::mutex::scoped_lock lock(m_Mutex);
+
+/*
+	if (!m_SSL)
+		return 0;
+*/
+
+	bool wantRead = false;
+
+	if (!SSL_pending(m_SSL.get()) || SSL_want_read(m_SSL.get()))
+		wantRead = true;
+
+	if (wantRead)
+		m_Socket->Poll(true, false);
+
+	Log(LogCritical, "TlsStream")
+		<< "BUMSTI: Want read: " << (wantRead ? "want to read" : "doesn't want to read");
+
+	while (left > 0) {
+		/* Clear error queue for this thread before using SSL_{read,write,do_handshake}.
+		 * Otherwise SSL_*_error() does not work reliably.
+		 */
+		ERR_clear_error();
+
+		rc = SSL_read(m_SSL.get(), ((char *)buffer) + (count - left), left);
+
+		if (rc <= 0) {
+			int err = SSL_get_error(m_SSL.get(), rc);
+
+			switch (err) {
+				case SSL_ERROR_WANT_READ:
+					try {
+						m_Socket->Poll(true, false);
+					} catch (const std::exception&) {}
+					continue;
+				case SSL_ERROR_WANT_WRITE:
+					try {
+						m_Socket->Poll(false, true);
+					} catch (const std::exception&) {}
+					continue;
+				case SSL_ERROR_ZERO_RETURN:
+					lock.unlock();
+
+					Close();
+
+					return left - count;
+
+				default:
+					/* Re-use old code, cleanup TODO */
+					m_ErrorCode = ERR_peek_error();
+					m_ErrorOccurred = true;
+
+					if (m_ErrorCode != 0) {
+						Log(LogWarning, "TlsStream")
+							<< "OpenSSL error: " << ERR_error_string(m_ErrorCode, nullptr);
+					} else {
+						Log(LogWarning, "TlsStream", "TLS stream was disconnected.");
+					}
+
+					lock.unlock();
+
+					Close();
+
+					BOOST_THROW_EXCEPTION(openssl_error()
+						<< boost::errinfo_api_function("SSL_do_read")
+						<< errinfo_openssl_error(ERR_peek_error()));
+			}
+		}
+
+		left -= rc;
+	}
+
+	return count;
+}
+
+void TlsStream::Write(const void *buffer, size_t count)
+{
+	int rc;
+	size_t left = count;
+
+	m_Socket->Poll(false, true);
+
+	boost::mutex::scoped_lock lock(m_Mutex);
+
+/*
+	if (!m_SSL)
+		return;
+*/
+
+	while (left > 0) {
+		/* Clear error queue for this thread before using SSL_{read,write,do_handshake}.
+		 * Otherwise SSL_*_error() does not work reliably.
+		 */
+		ERR_clear_error();
+
+		rc = SSL_write(m_SSL.get(), ((const char *)buffer) + (count - left), left);
+
+		if (rc <= 0) {
+			int err = SSL_get_error(m_SSL.get(), rc);
+
+			switch (err) {
+				case SSL_ERROR_WANT_READ:
+					try {
+						m_Socket->Poll(true, false);
+					} catch (const std::exception&) {}
+					continue;
+				case SSL_ERROR_WANT_WRITE:
+					try {
+						m_Socket->Poll(false, true);
+					} catch (const std::exception&) {}
+					continue;
+				case SSL_ERROR_ZERO_RETURN:
+					lock.unlock();
+
+					Close();
+
+					return;
+				default:
+					/* Re-use old code, cleanup TODO */
+					m_ErrorCode = ERR_peek_error();
+					m_ErrorOccurred = true;
+
+					if (m_ErrorCode != 0) {
+						Log(LogWarning, "TlsStream")
+							<< "OpenSSL error: " << ERR_error_string(m_ErrorCode, nullptr);
+					} else {
+						Log(LogWarning, "TlsStream", "TLS stream was disconnected.");
+					}
+
+					lock.unlock();
+
+					Close();
+
+					BOOST_THROW_EXCEPTION(openssl_error()
+						<< boost::errinfo_api_function("SSL_write")
+						<< errinfo_openssl_error(ERR_peek_error()));
+			}
+		}
+
+		left -= rc;
+	}
+}
+

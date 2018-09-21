@@ -478,6 +478,9 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		return;
 	}
 
+	Log(LogInformation, "ApiListener")
+		<< "Client TLS handshake OK (" << conninfo << ")";
+
 	std::shared_ptr<X509> cert = tlsStream->GetPeerCertificate();
 	String identity;
 	Endpoint::Ptr endpoint;
@@ -538,6 +541,7 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 		JsonRpc::SendMessage(tlsStream, message);
 		ctype = ClientJsonRpc;
 	} else {
+		/*
 		tlsStream->WaitForData(10);
 
 		if (!tlsStream->IsDataAvailable()) {
@@ -552,6 +556,7 @@ void ApiListener::NewClientHandlerInternal(const Socket::Ptr& client, const Stri
 			tlsStream->Close();
 			return;
 		}
+		*/
 
 		char firstByte;
 		tlsStream->Peek(&firstByte, 1, false);
