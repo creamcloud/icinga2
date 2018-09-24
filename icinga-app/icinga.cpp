@@ -50,6 +50,10 @@
 #	include <tchar.h>
 #endif /* _WIN32 */
 
+/* Test */
+#include <asio.hpp>
+
+
 using namespace icinga;
 namespace po = boost::program_options;
 
@@ -920,7 +924,37 @@ static VOID WINAPI ServiceMain(DWORD argc, LPSTR *argv)
 * @params argv Command line arguments.
 * @returns The application's exit status.
 */
+
+typedef std::shared_ptr<asio::ip::tcp::socket> socket_ptr;
+
+void client_session(socket_ptr sock)
+{
+	while (true) {
+		char data[512];
+		size_t len = sock->read_some(asio::buffer(data));
+
+		if (len > 0)
+			asio::write(*sock, asio::buffer("ok", 2));
+	}
+}
+
 int main(int argc, char **argv)
+{
+	asio::io_service service;
+
+	asio::ip::tcp::endpoint ep(asio::ip::tcp::v4(), 5665);
+	asio::ip::tcp::acceptor acc(service, ep);
+
+	while (true) {
+		socket_ptr sock(new asio::ip::tcp::socket(service));
+		acc.accept(*sock);
+		std::thread(std::bind(client_session, socket));
+	}
+
+	Application::Exit(0);
+}
+
+int main2(int argc, char **argv)
 {
 #ifndef _WIN32
 	if (!getenv("ICINGA2_KEEP_FDS")) {
