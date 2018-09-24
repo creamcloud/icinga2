@@ -158,6 +158,10 @@ include_directories(${OPENSSL_INCLUDE_DIR})
 set(base_DEPS ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES})
 set(base_OBJS $<TARGET_OBJECTS:mmatch> $<TARGET_OBJECTS:socketpair> $<TARGET_OBJECTS:base>)
 
+# ASIO
+find_package(ASIO)
+include_directories(${ASIO_INCLUDE})
+
 find_package(YAJL)
 
 if(NOT YAJL_FOUND)
