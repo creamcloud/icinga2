@@ -213,6 +213,8 @@ static int Main()
 		/* Internal constants. */
 		Configuration::PkgDataDir = binaryPrefix + "\\share\\icinga2";
 		Configuration::IncludeConfDir = binaryPrefix + "\\share\\icinga2\\include";
+
+		Configuration::InitRunDir = dataPrefix + "\\var\\run";
 	} else {
 		Log(LogWarning, "icinga-app", "Registry key could not be read. Falling back to built-in paths.");
 
